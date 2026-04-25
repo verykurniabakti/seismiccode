@@ -78,49 +78,43 @@ def run_benchmark_with_checkpoint():
         dataset = f['data']
         
         for i in tqdm(range(start_index, len(df)), desc="Overall Progress"):
+            row = df.iloc[i]
+            trace_name = row['trace_name']
+            
             try:
-                # Di dalam loop utama h5py
-                raw_data = dataset[trace_name]
-                z_data = raw_data[start_idx : end_idx, 0]
-                n_data = raw_data[start_idx : end_idx, 1]
-                e_data = raw_data[start_idx : end_idx, 2]
+                # 1. Ambil data mentah (7 detik pertama)
+                data_hdf5 = dataset[trace_name]
+                z_data = data_hdf5[:num_points, 0]
+                n_data = data_hdf5[:num_points, 1]
+                e_data = data_hdf5[:num_points, 2]
 
-                # --- LANGKAH KRUSIAL: NORMALISASI INPUT ---
-                # Demean dan scaling sinyal mentah agar sesuai 'kacamata' model
+                # 2. NORMALISASI INPUT (Z-Score) - KUNCI REPLIKASI
                 z_norm = (z_data - np.mean(z_data)) / (np.std(z_data) + 1e-6)
                 n_norm = (n_data - np.mean(n_data)) / (np.std(n_data) + 1e-6)
                 e_norm = (e_data - np.mean(e_data)) / (np.std(e_data) + 1e-6)
 
-                # 4. Feature Extraction (Vektor 32D)
+                # 3. FEATURE EXTRACTION (32D)
                 z_latent = utils.latent_codes_1D(z_norm, embedding_model)
                 n_latent = utils.latent_codes_1D(n_norm, embedding_model)
                 e_latent = utils.latent_codes_1D(e_norm, embedding_model)
 
-                # 5. Reduksi Dimensi (Averaging)
+                # 4. REDUKSI DIMENSI (Averaging)
                 _feat_z = np.mean(z_latent)
                 _feat_n = np.mean(n_latent)
                 _feat_e = np.mean(e_latent)
 
-# 6. Gabungkan ke 3D sesuai urutan KDE (E, N, Z)
-input_embeddings_3C = np.array([[_feat_e, _feat_n, _feat_z]])
-
-                # --- OPSIONAL: SCALING BERDASARKAN STATS (Coba jika Mean saja gagal) ---
-                # Jika hasil masih buruk, kemungkinan besar fitur harus di-Z-score dulu
-                # _feat_z = (_feat_z - (-4.58)) / 1.15
-                
+                # 5. GABUNGKAN KE 3D (E, N, Z)
                 input_embeddings_3C = np.array([[_feat_e, _feat_n, _feat_z]])
 
-                # 3. Gabungkan sesuai urutan utils (E, N, Z)
-                input_embeddings_3C = np.array([[_feat_e, _feat_n, _feat_z]])
-
-                # 4. Klasifikasi
+                # 6. KLASIFIKASI DENGAN KDE
                 y_pred, _, _ = utils.infer_3C_PDFs(
                     input_embeddings_3C, 
                     embeddings_3C_PDFs, 
                     choose_pdf="Kernel"
                 )
 
-                y_true = 2 if row['trace_category'] == 'earthquake' else 0
+                # Mapping label asli untuk evaluasi
+                y_true = 2 if 'earthquake' in str(row['trace_category']).lower() else 0
 
                 results_buffer.append({'trace_name': trace_name, 'y_true': y_true, 'y_pred': y_pred})
 
