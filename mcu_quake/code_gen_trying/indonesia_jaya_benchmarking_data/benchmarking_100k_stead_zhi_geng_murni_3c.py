@@ -2,6 +2,7 @@
 import sys
 import os
 import gc
+import csv
 import json
 import h5py
 import pandas as pd
@@ -32,36 +33,17 @@ if BASE_REP not in sys.path:
 
 from Library import utils, dataset
 
-def predict_and_evaluate_3c_batch(model, batch_waves, kde_noise, kde_le):
-    """
-    Fungsi isolasi untuk inferensi batch 3C.
-    Input batch_waves berdimensi: (BATCH_SIZE, 700, 3)
-    """
-    num_points = 700
-    batch_input = np.array(batch_waves, dtype=np.float32).reshape(-1, num_points, 3)
-    
-    with tf.device('/CPU:0'):
-        embeddings = model.predict_on_batch(batch_input)
-    
-    laten_space = embeddings.T 
-    like_noise = kde_noise.pdf(laten_space)
-    like_le = kde_le.pdf(laten_space)
-    
-    likelihoods = np.vstack([like_noise, like_le])
-    preds = np.argmax(likelihoods, axis=0)
-    
-    return preds
-
 if __name__ == "__main__":
     # --- PATH SUMBER DATA UTAMA (MURNI STEAD) ---
     CSV_PATH = '/Volumes/Extreme SSD/stream_stead/data_stead/merge.csv'
     HDF5_PATH = '/Volumes/Extreme SSD/stream_stead/data_stead/merge.hdf5'
     ZHI_GENG_JSON = '/Volumes/Local Disk/Code_Git/S3_code/seismic/mcu_quake/code_gen_trying/indonesia_jaya_benchmarking_data/mcquake_ori_file/Benchmark_ STEAD 3C_ test n15275 r100/STEAD data, test n15275 r100.json'
     
-    # --- PATH OUTPUT GRAFIS HASIL UNIFIKASI 3C ---
+    # --- PATH OUTPUT GRAFIS & CSV ---
     DIR_OUTPUT_GRAFIS = '/Volumes/Local Disk/Code_Git/S3_code/seismic/mcu_quake/code_gen_trying/indonesia_jaya_benchmarking_data/output/output_grafis_100k_stead'
     os.makedirs(DIR_OUTPUT_GRAFIS, exist_ok=True)
     
+    CSV_HASIL_PREDIKSI = os.path.join(DIR_OUTPUT_GRAFIS, "hasil_prediksi_3c_100k_strict.csv")
     MODEL_PATH = os.path.join(BASE_REP, "Pre-trained model/MCU-Quake 5-20")
     EMB_DIR = os.path.join(BASE_REP, "Typical embedding/Embedding_data train 3C, UUSS n11275 std15, 30120909")
 
@@ -133,98 +115,120 @@ if __name__ == "__main__":
     gc.collect()
 
     # --------------------------------------------------------------------------
-    # FASE 3: INFERENSI TERMINAL ON-THE-FLY MURNI STEAD 3C
+    # FASE 3: INFERENSI ON-THE-FLY & CHECKPOINTING CSV (ANTI MEMORY LEAK)
     # --------------------------------------------------------------------------
     num_points = 700 
     norm_points = 900
     BUFFER_SIZE = 128
+    
     buffer_waves = []
-    
-    # ARRAY PRE-ALLOCATION (Pengganti list.append untuk mencegah Memory Leak masif)
-    y_true_all = np.zeros(total_target, dtype=np.int32)
-    y_pred_all = np.zeros(total_target, dtype=np.int32)
-    
-    current_idx = 0 # Pointer untuk melacak posisi simpan array prediksi
+    buffer_traces = []
+    buffer_y_true = []
 
-    print(f"\n[INFO] Memulai inferensi on-the-fly 3C langsung dari HDF5...")
-    with h5py.File(HDF5_PATH, 'r') as f_h5:
-        data_group = f_h5['data']
-        
-        for idx in tqdm(range(total_target), desc="STEAD 3C Murni 100K"):
-            try:
-                trace_id = trace_names[idx]
-                category = trace_categories[idx]
-                
-                if trace_id not in data_group:
-                    continue
+    print(f"\n[INFO] Memulai inferensi on-the-fly 3C. Hasil dicicil ke: {CSV_HASIL_PREDIKSI}")
+    
+    # Buka CSV dalam mode Write
+    with open(CSV_HASIL_PREDIKSI, 'w', newline='') as f_csv:
+        writer = csv.writer(f_csv)
+        writer.writerow(['trace_id', 'y_true', 'y_pred']) # Tulis Header
+
+        with h5py.File(HDF5_PATH, 'r') as f_h5:
+            data_group = f_h5['data']
+            
+            for idx in tqdm(range(total_target), desc="Inferensi STEAD 3C Murni"):
+                try:
+                    trace_id = trace_names[idx]
+                    category = trace_categories[idx]
                     
-                # 1. Tarik komponen penuh 3C (E, N, Z) langsung dari SSD
-                raw_wave_3c = data_group[trace_id][()]
-                
-                # 2. Detrending secara terisolasi per sumbu
-                detrended_wave_3c = raw_wave_3c - np.mean(raw_wave_3c, axis=0)
-                
-                if category == 'earthquake_local':
-                    start_idx = int(p_arrivals[idx])
-                    end_idx = start_idx + num_points
-                    norm_end_idx = start_idx + norm_points
-                    
-                    if norm_end_idx > len(detrended_wave_3c) or start_idx < 0: 
+                    if trace_id not in data_group:
                         continue
                         
-                    wave_slice_3c = detrended_wave_3c[start_idx:end_idx, :]
+                    raw_wave_3c = data_group[trace_id][()]
                     
-                    # [KOREKSI BAPAK] Normalisasi independen per saluran (axis=0)
-                    norm_val_3c = np.max(np.abs(detrended_wave_3c[start_idx:norm_end_idx, :]), axis=0)
-                    true_label = 1
-                else:
-                    wave_slice_3c = detrended_wave_3c[:num_points, :]
-                    norm_val_3c = np.max(np.abs(detrended_wave_3c[:norm_points, :]), axis=0)
-                    true_label = 0
-                
-                # Proteksi pembagian nol
-                norm_val_3c[norm_val_3c == 0] = 1e-8
-                wave_slice_3c /= norm_val_3c
-                
-                # Masukkan ke buffer inferensi
-                buffer_waves.append(wave_slice_3c)
-                y_true_all[current_idx] = true_label
-                
-                if len(buffer_waves) == BUFFER_SIZE:
-                    b_preds = predict_and_evaluate_3c_batch(
-                        embedding_model, buffer_waves, kde_noise, kde_le
-                    )
+                    # [ATURAN ZHI GENG 1] Detrending secara terisolasi per sumbu
+                    detrended_wave_3c = raw_wave_3c - np.mean(raw_wave_3c, axis=0)
                     
-                    # Simpan hasil prediksi ke array yang sudah dialokasikan
-                    start_pred_idx = current_idx - BUFFER_SIZE + 1
-                    y_pred_all[start_pred_idx : current_idx + 1] = b_preds
+                    if category == 'earthquake_local':
+                        start_idx = int(p_arrivals[idx])
+                        end_idx = start_idx + num_points
+                        norm_end_idx = start_idx + norm_points
+                        
+                        if norm_end_idx > len(detrended_wave_3c) or start_idx < 0: 
+                            continue
+                            
+                        wave_slice_3c = detrended_wave_3c[start_idx:end_idx, :]
+                        
+                        # [ATURAN ZHI GENG 2] NORMALISASI GLOBAL LINTAS 3 SUMBU 
+                        # Pencarian nilai tunggal absolut tertinggi dari seluruh saluran E, N, Z
+                        norm_val_3c = np.max(np.abs(detrended_wave_3c[start_idx:norm_end_idx, :]))
+                        true_label = 1
+                    else:
+                        wave_slice_3c = detrended_wave_3c[:num_points, :]
+                        norm_val_3c = np.max(np.abs(detrended_wave_3c[:norm_points, :]))
+                        true_label = 0
                     
-                    buffer_waves.clear()
+                    if norm_val_3c == 0:
+                        norm_val_3c = 1e-8
+                        
+                    wave_slice_3c /= norm_val_3c
                     
-                if (idx + 1) % 10000 == 0:
-                    gc.collect() 
-                    K.clear_session()
+                    # Masukkan ke dalam antrean (buffer) sementara
+                    buffer_waves.append(wave_slice_3c)
+                    buffer_traces.append(trace_id)
+                    buffer_y_true.append(true_label)
                     
-                current_idx += 1
-                
-            except Exception:
-                continue
+                    # JIKA BUFFER PENUH -> INFERENSI -> TULIS KE CSV -> HAPUS RAM
+                    if len(buffer_waves) == BUFFER_SIZE:
+                        batch_input = np.array(buffer_waves, dtype=np.float32).reshape(-1, num_points, 3)
+                        
+                        # [PENGUNCI MEMORY LEAK] Menggunakan .numpy() murni
+                        with tf.device('/CPU:0'):
+                            embeddings = embedding_model(batch_input, training=False).numpy()
+                        
+                        laten_space = embeddings.T 
+                        like_noise = kde_noise.pdf(laten_space)
+                        like_le = kde_le.pdf(laten_space)
+                        b_preds = np.argmax(np.vstack([like_noise, like_le]), axis=0)
+                        
+                        # Langsung tulis ke Hard Disk (CSV)
+                        for i in range(len(b_preds)):
+                            writer.writerow([buffer_traces[i], buffer_y_true[i], b_preds[i]])
+                        
+                        # Kosongkan RAM
+                        buffer_waves.clear()
+                        buffer_traces.clear()
+                        buffer_y_true.clear()
+                        
+                    if (idx + 1) % 10000 == 0:
+                        gc.collect() 
+                        K.clear_session()
+                        
+                except Exception:
+                    continue
 
-        # Sisa Eksekusi Akhir di dalam Buffer
-        if len(buffer_waves) > 0:
-            b_preds = predict_and_evaluate_3c_batch(
-                embedding_model, buffer_waves, kde_noise, kde_le
-            )
-            start_pred_idx = current_idx - len(buffer_waves)
-            y_pred_all[start_pred_idx : current_idx] = b_preds
-
-    # Potong array pre-allocation jika ada data yang di-skip (continue)
-    y_true_final = y_true_all[:current_idx]
-    y_pred_final = y_pred_all[:current_idx]
+            # Eksekusi sisa buffer terakhir di akhir looping
+            if len(buffer_waves) > 0:
+                batch_input = np.array(buffer_waves, dtype=np.float32).reshape(-1, num_points, 3)
+                with tf.device('/CPU:0'):
+                    embeddings = embedding_model(batch_input, training=False).numpy()
+                
+                laten_space = embeddings.T 
+                like_noise = kde_noise.pdf(laten_space)
+                like_le = kde_le.pdf(laten_space)
+                b_preds = np.argmax(np.vstack([like_noise, like_le]), axis=0)
+                
+                for i in range(len(b_preds)):
+                    writer.writerow([buffer_traces[i], buffer_y_true[i], b_preds[i]])
 
     # ==========================================================================
-    # KALKULASI METRIK & GRAFIS (AKSES ARRAY MURNI)
+    # FASE 4: BACA HASIL CSV UNTUK KALKULASI METRIK & CETAK GRAFIK
     # ==========================================================================
+    print("\n[INFO] Membaca rekapitulasi CSV untuk kalkulasi Metrik Akhir...")
+    df_hasil = pd.read_csv(CSV_HASIL_PREDIKSI)
+    
+    y_true_final = df_hasil['y_true'].to_numpy()
+    y_pred_final = df_hasil['y_pred'].to_numpy()
+    
     TP = np.sum((y_true_final == 1) & (y_pred_final == 1))
     TN = np.sum((y_true_final == 0) & (y_pred_final == 0))
     FP = np.sum((y_true_final == 0) & (y_pred_final == 1))
@@ -245,7 +249,7 @@ if __name__ == "__main__":
     # ==========================================================================
     # OTOMASI GENERASI GRAFIK OUTPUT 3C (ZHI GENG STYLE)
     # ==========================================================================
-    print(f"\n[INFO] Menghasilkan grafik visualisasi ilmiah 3C ke path: {DIR_OUTPUT_GRAFIS}")
+    print(f"[INFO] Menghasilkan grafik visualisasi ilmiah 3C ke path: {DIR_OUTPUT_GRAFIS}")
     
     # --- GRAFIK 1: CONFUSION MATRIX ---
     cm_matrix = np.array([[TN, FP], [FN, TP]])
@@ -333,7 +337,7 @@ if __name__ == "__main__":
     print(f"False Negatives (FN)  : {FN:,}")
     print("-------------------------------------------------------")
     print(f"Akurasi Global        : {akurasi:.4f} ({(akurasi*100):.2f}%)")
-    print(f"Recall (TPR)          : {recall_tpr:.4f} ({(recall_tpr*100):.2f}%)")
+    print(f"Recall (TPR)          : {tpr_recall:.4f} ({(tpr_recall*100):.2f}%)")
     print(f"Spesifisitas (TNR)    : {tnr_spesifisitas:.4f} ({(tnr_spesifisitas*100):.2f}%)")
     print(f"Presisi (PPV)         : {ppv_presisi:.4f} ({(ppv_presisi*100):.2f}%)")
     print(f"F1-Score              : {f1_score:.4f} ({(f1_score*100):.2f}%)")
