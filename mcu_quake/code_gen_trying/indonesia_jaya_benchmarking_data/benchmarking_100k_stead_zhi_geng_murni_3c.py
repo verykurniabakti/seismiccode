@@ -178,19 +178,26 @@ if __name__ == "__main__":
                     buffer_y_true.append(true_label)
                     
                     # JIKA BUFFER PENUH -> INFERENSI -> TULIS KE CSV -> HAPUS RAM
-                    if len(buffer_waves) == BUFFER_SIZE:
-                        batch_input = np.array(buffer_waves, dtype=np.float32).reshape(-1, num_points, 3)
+                    # Eksekusi sisa buffer terakhir di akhir looping
+                    if len(buffer_waves) > 0:
+                        batch_input = np.array(buffer_waves, dtype=np.float32)
                         
-                        # [PENGUNCI MEMORY LEAK] Menggunakan .numpy() murni
+                        batch_E = batch_input[:, :, 0:1]
+                        batch_N = batch_input[:, :, 1:2]
+                        batch_Z = batch_input[:, :, 2:3]
+                        
                         with tf.device('/CPU:0'):
-                            embeddings = embedding_model(batch_input, training=False).numpy()
+                            emb_E = embedding_model(batch_E, training=False).numpy()
+                            emb_N = embedding_model(batch_N, training=False).numpy()
+                            emb_Z = embedding_model(batch_Z, training=False).numpy()
                         
-                        laten_space = embeddings.T 
+                        embeddings_3c = np.hstack([emb_E, emb_N, emb_Z])
+                        laten_space = embeddings_3c.T 
+                        
                         like_noise = kde_noise.pdf(laten_space)
                         like_le = kde_le.pdf(laten_space)
                         b_preds = np.argmax(np.vstack([like_noise, like_le]), axis=0)
                         
-                        # Langsung tulis ke Hard Disk (CSV)
                         for i in range(len(b_preds)):
                             writer.writerow([buffer_traces[i], buffer_y_true[i], b_preds[i]])
                         
