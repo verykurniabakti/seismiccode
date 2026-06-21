@@ -38,7 +38,7 @@ if __name__ == "__main__":
     print(f"[INFO] Memuat Dataset STEAD: {KEY_TEST_FILE}")
     test_data = dataset.load_json_data(os.path.join(KEY_DATA_DIR, KEY_TEST_FILE))
     
-    SAVE_BASE = "/Volumes/Extreme SSD/mcu_quake_output_replikasi_demo"
+    SAVE_BASE = "/Volumes/Extreme SSD/mcu_quake_output_replikasi_demo/indonesia_domain_new_data/nSTEAD_embedding"
     now = datetime.now()
     time_str = now.strftime("%d%H%M%S")
     save_dir = os.path.join(SAVE_BASE, f"{MODEL_TAG}_{DATA_TAG}_{time_str}")
