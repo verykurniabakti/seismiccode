@@ -23,19 +23,23 @@ import hashlib
 # KONFIGURASI
 # =============================================
 
-CATALOG_CSV = "/Volumes/Extreme SSD/unduhan_juni_bmkg_usgs/hasilscan/eda_final_output/filtered_events_selected.csv"
-OUTPUT_DIR = "/Volumes/Extreme SSD/unduhan_waveform_geofon"
+#CATALOG_CSV = "/Volumes/Extreme SSD/unduhan_juni_bmkg_usgs/hasilscan/eda_final_output/filtered_events_selected.csv"
+CATALOG_CSV = '/Volumes/Extreme SSD/unduhan_juni_bmkg_usgs/hasilscan/eda_final_output/HYBRID_EARTHQUAKE_CATALOG_2001_2024_FIX.csv'
+OUTPUT_DIR = "/Volumes/Extreme SSD/unduhan_waveform_geofon_juli"
 
 TIME_BEFORE = 30          # detik sebelum origin
 TIME_AFTER = 120          # detik setelah origin
-MAX_RADIUS_DEG = 12.0     # radius pencarian stasiun awal
+MAX_RADIUS_DEG = 15.0     # radius pencarian stasiun awal
 FALLBACK_RADIUS_DEG = 25.0 # radius kedua jika gagal
 CHANNELS = ['BHZ','BHN','BHE','HHZ','HHN','HHE','EHZ','EHN','EHE']
 LOCATION = "*"
 
 # --- Parallel ---
 MAX_WORKERS = 6           # jumlah thread paralel (sesuaikan)
-MAX_EVENTS = 15000         # None untuk semua, atau angka untuk testing
+MAX_EVENTS = 25000         # None untuk semua, atau angka untuk testing
+
+MIN_MAGNITUDE = 4.5        # hanya event dengan magnitudo ≥ 4.5
+MIN_YEAR = 2004            # hanya event dari 2004 ke atas (kualitas data lebih baik)
 
 # --- Logging ---
 LOG_FILE = "download_waveform.log"
@@ -49,6 +53,46 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+# =============================================
+# FUNGSI BANTUAN CEK UKURAN
+# =============================================
+
+def download_event_with_retry(event, output_dir, max_retries=3):
+    """Download dengan retry mechanism."""
+    for attempt in range(max_retries):
+        try:
+            result = download_event(event, output_dir)
+            if result:
+                # Cek ukuran file
+                event_id = event['id']
+                existing = [f for f in os.listdir(output_dir) if event_id in f and f.endswith('.mseed')]
+                if existing:
+                    filepath = os.path.join(output_dir, existing[0])
+                    if os.path.getsize(filepath) < 1024:  # < 1 KB
+                        os.remove(filepath)
+                        logger.warning(f"Event {event_id}: File terlalu kecil, dihapus. Retry {attempt+1}/{max_retries}")
+                        continue
+                return True
+        except Exception as e:
+            logger.warning(f"Event {event_id}: Attempt {attempt+1} failed: {e}")
+            time.sleep(2 ** attempt)  # exponential backoff
+    return False
+
+def read_catalog(catalog_path):
+    df = pd.read_csv(catalog_path)
+    # ... (deteksi kolom) ...
+    
+    # Filter tambahan
+    if 'magnitude' in df.columns:
+        df = df[df['magnitude'] >= MIN_MAGNITUDE]
+        logger.info(f"🔍 Filter magnitudo ≥ {MIN_MAGNITUDE}: {len(df)} event tersisa")
+    
+    if 'year' in df.columns:
+        df = df[df['year'] >= MIN_YEAR]
+        logger.info(f"🔍 Filter tahun ≥ {MIN_YEAR}: {len(df)} event tersisa")
+    
+    return df, lat_col, lon_col
 # =============================================
 # CACHE STASIUN (agar tidak query ulang)
 # =============================================
