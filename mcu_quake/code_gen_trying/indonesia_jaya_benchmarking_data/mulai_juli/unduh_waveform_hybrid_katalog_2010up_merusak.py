@@ -36,7 +36,7 @@ CHANNELS = ['BHZ','BHN','BHE','HHZ','HHN','HHE','EHZ','EHN','EHE']
 LOCATION = "*"
 
 # Sampling: ambil N event per tahun (tahun ≥ 2010)
-EVENTS_PER_YEAR = 1500
+EVENTS_PER_YEAR = 50
 
 # Parallel
 MAX_WORKERS = 6
