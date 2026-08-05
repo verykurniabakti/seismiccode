@@ -298,6 +298,10 @@ class Contrastive_Model(keras.Model):
     
 
     def train_step(self, inputs):
+        # --- PERBAIKAN FORMAT UNPACKING KERAS ---
+        if isinstance(inputs, tuple) and len(inputs) == 2:
+            inputs, _ = inputs 
+        # ----------------------------------------
 
         with tf.GradientTape() as tape:
             # compute the distances
@@ -325,6 +329,11 @@ class Contrastive_Model(keras.Model):
 
 
     def test_step(self, inputs):
+        # --- PERBAIKAN FORMAT UNPACKING KERAS ---
+        if isinstance(inputs, tuple) and len(inputs) == 2:
+            inputs, _ = inputs 
+        # ----------------------------------------
+
         # Compute the distances
         (refer_pos_dist, refer_neg_dist, refer_sil_dist) = self._compute_distance(inputs)
 
@@ -336,12 +345,6 @@ class Contrastive_Model(keras.Model):
 
         metric = self._compute_acc(refer_pos_dist, refer_neg_dist, refer_sil_dist)
 
-
         return {"loss": self.loss_tracker.result(),
                 "acc": metric,
                 }
-    
-    @property
-    def metrics(self):
-        return [self.loss_tracker,
-                self.matric_acc]
