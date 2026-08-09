@@ -32,19 +32,24 @@ if not os.path.exists(OUTPUT_DIR):
     os.makedirs(OUTPUT_DIR)
 
 # ==========================================
-# 2. CUSTOM JSON DATA GENERATOR (KERAS SEQUENCE)
+# 2. CUSTOM JSON DATA GENERATOR (DIKOREKSI)
 # ==========================================
 class JSONTripletGenerator(keras.utils.Sequence):
     def __init__(self, json_data, keys, batch_size=32, channel="Z", input_size=700):
         self.json_data = json_data
-        self.keys = keys
+        self.keys = np.array(keys) # Pastikan format array untuk slicing
         self.batch_size = batch_size
         self.channel = channel
         self.input_size = input_size
         self.noise_channel = f"{channel}_noise"
+        self.on_epoch_end() # Inisialisasi pengacakan pertama
 
     def __len__(self):
         return int(np.floor(len(self.keys) / self.batch_size))
+
+    def on_epoch_end(self):
+        # Mengacak urutan data SETIAP KALI epoch selesai
+        np.random.shuffle(self.keys)
 
     def __getitem__(self, index):
         batch_refer = np.empty((self.batch_size, self.input_size, 1))
@@ -52,10 +57,16 @@ class JSONTripletGenerator(keras.utils.Sequence):
         batch_neg = np.empty((self.batch_size, self.input_size, 1))
         batch_sil = np.zeros((self.batch_size, self.input_size, 1)) 
 
-        for i in range(self.batch_size):
-            key_refer = np.random.choice(self.keys)
-            key_pos = np.random.choice(self.keys)
-            key_neg = np.random.choice(self.keys) 
+        # Mengambil subset kunci berdasarkan index batch
+        batch_keys = self.keys[index * self.batch_size : (index + 1) * self.batch_size]
+
+        for i, key_refer in enumerate(batch_keys):
+            # Memastikan key_pos BERBEDA dengan key_refer
+            available_pos_keys = self.keys[self.keys != key_refer]
+            key_pos = np.random.choice(available_pos_keys)
+            
+            # Negatif bisa diambil dari mana saja
+            key_neg = np.random.choice(self.keys)
 
             sig_refer = np.array(self.json_data[key_refer][self.channel][:self.input_size])
             sig_pos = np.array(self.json_data[key_pos][self.channel][:self.input_size])
@@ -102,12 +113,7 @@ def main():
         del master_data, train_data, test_data
     # ------------------------------------------------
 
-    print("Membaca file JSON TRAIN Indonesia (Data Test tidak disentuh)...")
-    with open(TRAIN_JSON_PATH, "r") as f:
-        data_train_only = json.load(f)
     
-    train_keys = list(data_train_only.keys())
-    np.random.shuffle(train_keys)
     
     # Split internal (dari file Train) untuk Validasi Keras saat Epoch berjalan
     val_split_idx = int(0.8 * len(train_keys))

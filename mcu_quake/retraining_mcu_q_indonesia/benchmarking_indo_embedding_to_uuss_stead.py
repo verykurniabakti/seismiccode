@@ -60,7 +60,8 @@ if __name__ == "__main__":
     TEST_DATASETS = {
         "INDONESIA_TEST": "/Volumes/Local Disk/Code_Git/S3_code/seismic/mcu_quake/retraining_mcu_q_indonesia/data_indonesia/indonesia_test_data.json",
         "UUSS": "/Volumes/Local Disk/Code_Git/S3_code/seismic/mcu_quake/retraining_mcu_q_indonesia/Benchmark_ UUSS 3C_ test n2222 r100/UUSS 3C data, test n2222 r100.json",
-        "STEAD": "/Volumes/Local Disk/Code_Git/S3_code/seismic/mcu_quake/retraining_mcu_q_indonesia/Benchmark_ STEAD 3C_ test n15275 r100/STEAD data, test n15275 r100.json"
+        "STEAD": "/Volumes/Local Disk/Code_Git/S3_code/seismic/mcu_quake/retraining_mcu_q_indonesia/Benchmark_ STEAD 3C_ test n15275 r100/STEAD data, test n15275 r100.json",
+        "STEAD_UNSEEN": "/Volumes/Extreme SSD/stream_stead/data_stead/stead_sample_10000/STEAD_10k_3C_20260726_173059.json"
     }
 
     MODEL_TAG = "MCU_Quake_3C"
