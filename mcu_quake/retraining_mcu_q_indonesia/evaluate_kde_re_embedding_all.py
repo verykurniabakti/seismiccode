@@ -42,12 +42,12 @@ SCENARIOS = {
     "baseline":               (MODEL_PRETRAINED, "source",    TEST_JSON),
     "kde_reembed":            (MODEL_PRETRAINED, TRAIN_JSON,  TEST_JSON),
     "retrained":              (MODEL_RETRAINED,  TRAIN_JSON,  TEST_JSON),
-    "retensi_uuss":           (MODEL_PRETRAINED, TRAIN_JSON,  UUSS_JSON),
-    "retensi_stead":          (MODEL_PRETRAINED, TRAIN_JSON,  STEAD_JSON),
-    "retensi_uuss_retrain":   (MODEL_RETRAINED,  TRAIN_JSON,  UUSS_JSON),
-    "retensi_stead_retrain":  (MODEL_RETRAINED,  TRAIN_JSON,  STEAD_JSON),
-    "retensi_stead_unseen":         (MODEL_PRETRAINED, TRAIN_JSON,  STEAD_UNSEEN_JSON),
-    "retensi_stead_unseen_retrain": (MODEL_RETRAINED,  TRAIN_JSON,  STEAD_UNSEEN_JSON),
+    "retention_uuss":           (MODEL_PRETRAINED, TRAIN_JSON,  UUSS_JSON),
+    "retention_stead":          (MODEL_PRETRAINED, TRAIN_JSON,  STEAD_JSON),
+    "retention_uuss_retrain":   (MODEL_RETRAINED,  TRAIN_JSON,  UUSS_JSON),
+    "retention_stead_retrain":  (MODEL_RETRAINED,  TRAIN_JSON,  STEAD_JSON),
+    "retention_stead_unseen":         (MODEL_PRETRAINED, TRAIN_JSON,  STEAD_UNSEEN_JSON),
+    "retention_stead_unseen_retrain": (MODEL_RETRAINED,  TRAIN_JSON,  STEAD_UNSEEN_JSON),
 }
 
 # ==========================================
