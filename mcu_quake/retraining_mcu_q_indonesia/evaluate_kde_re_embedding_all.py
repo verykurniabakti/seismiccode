@@ -50,6 +50,25 @@ SCENARIOS = {
     "retention_stead_unseen_retrain": (MODEL_RETRAINED,  TRAIN_JSON,  STEAD_UNSEEN_JSON),
 }
 
+# Reproducibility: fixed seed so the epsilon jitter (see run_scenario) draws the
+# same numbers on every run, keeping confusion-matrix figures/metrics identical
+# across re-runs instead of drifting by a handful of borderline events.
+RANDOM_SEED = 42
+
+# Judul gambar yang rapi untuk publikasi (bahasa Inggris, tanpa nama variabel
+# mentah). Dipakai menggantikan `name` (key SCENARIOS) di judul plot_confusion.
+SCENARIO_DISPLAY_TITLES = {
+    "baseline": "Baseline (Static Model)",
+    "kde_reembed": "KDE Re-Embedding",
+    "retrained": "Full Retraining",
+    "retention_uuss": "KDE Re-Embedding — UUSS Retention",
+    "retention_stead": "KDE Re-Embedding — STEAD Retention",
+    "retention_uuss_retrain": "Full Retraining — UUSS Retention",
+    "retention_stead_retrain": "Full Retraining — STEAD Retention",
+    "retention_stead_unseen": "KDE Re-Embedding — STEAD Unseen",
+    "retention_stead_unseen_retrain": "Full Retraining — STEAD Unseen",
+}
+
 # ==========================================
 # UTILITAS JSON AMAN
 # ==========================================
@@ -163,11 +182,15 @@ def run_scenario(name):
         print(f"[INFO] ✅ Vektor KDE berhasil disimpan ke:\n       {emb_out_path}")
 
     print("[INFO] Membangun KDE dari himpunan referensi...")
-    
-    # FITUR: Injeksi Derau Epsilon (Jitter) untuk mencegah scipy LinAlgError
+
+    # FITUR: Injeksi Derau Epsilon (Jitter) untuk mencegah scipy LinAlgError.
+    # Di-seed ulang di sini (bukan cuma sekali di awal skrip) agar jitter untuk
+    # skenario ini selalu identik terlepas dari skenario apa saja yang sudah
+    # dijalankan sebelumnya, menjaga confusion matrix & metrik 100% reproducible.
+    rng = np.random.RandomState(RANDOM_SEED)
     eps = 1e-6
-    le_jitter = np.array(ref["le"]) + np.random.normal(0, eps, np.array(ref["le"]).shape)
-    noise_jitter = np.array(ref["noise"]) + np.random.normal(0, eps, np.array(ref["noise"]).shape)
+    le_jitter = np.array(ref["le"]) + rng.normal(0, eps, np.array(ref["le"]).shape)
+    noise_jitter = np.array(ref["noise"]) + rng.normal(0, eps, np.array(ref["noise"]).shape)
 
     pdfs = embedding_PDFs_1D(
         {"noise": noise_jitter.tolist(), "le": le_jitter.tolist()}, 
@@ -210,9 +233,9 @@ def run_scenario(name):
             f, indent=2, cls=NpEncoder
         )
 
-    display_name = name.replace("stead", "STEAD").replace("uuss", "UUSS")
+    display_name = SCENARIO_DISPLAY_TITLES.get(name, name)
     fig = plot_confusion(
-        title=f"{display_name} ({CHANNEL}-Axis)\nTest: {len(test['keys'])} events/class",
+        title=f"{display_name} (Component {CHANNEL})\nn = {len(test['keys'])} events/class",
         true_labels=["NO", "LE"],
         matrix=cnf,
         metrics=metrics,

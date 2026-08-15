@@ -113,8 +113,12 @@ def main():
         del master_data, train_data, test_data
     # ------------------------------------------------
 
-    
-    
+    # Muat data_train_only dari TRAIN_JSON_PATH (dipakai generator train & val di bawah).
+    # File ini sudah pasti ada di titik ini, baik dari blok split di atas maupun dari run sebelumnya.
+    with open(TRAIN_JSON_PATH, "r") as f:
+        data_train_only = json.load(f)
+    train_keys = list(data_train_only.keys())
+
     # Split internal (dari file Train) untuk Validasi Keras saat Epoch berjalan
     val_split_idx = int(0.8 * len(train_keys))
     final_train_keys = train_keys[:val_split_idx]
