@@ -1,243 +1,138 @@
-{
- "cells": [
-  {
-   "cell_type": "code",
-   "execution_count": 1,
-   "id": "6c38691b",
-   "metadata": {},
-   "outputs": [
-    {
-     "name": "stderr",
-     "output_type": "stream",
-     "text": [
-      "usage: ipykernel_launcher.py [-h]\n",
-      "                             [{baseline,kde_reembed,retrained,retensi_uuss,retensi_stead,all}]\n",
-      "ipykernel_launcher.py: error: unrecognized arguments: --f=/Users/verykurniabakti/Library/Jupyter/runtime/kernel-v30d613bf6ad8c340bea072fe35f0a4605878f39ee.json\n"
-     ]
-    },
-    {
-     "ename": "SystemExit",
-     "evalue": "2",
-     "output_type": "error",
-     "traceback": [
-      "An exception has occurred, use %tb to see the full traceback.\n",
-      "\u001b[31mSystemExit\u001b[39m\u001b[31m:\u001b[39m 2\n"
-     ]
-    },
-    {
-     "name": "stderr",
-     "output_type": "stream",
-     "text": [
-      "/opt/homebrew/Caskroom/miniforge/base/envs/tf-metal/lib/python3.11/site-packages/IPython/core/interactiveshell.py:3756: UserWarning: To exit: use 'exit', 'quit', or Ctrl-D.\n",
-      "  warn(\"To exit: use 'exit', 'quit', or Ctrl-D.\", stacklevel=1)\n"
-     ]
-    }
-   ],
-   "source": [
-    "# -*- coding: utf-8 -*-\n",
-    "\"\"\"\n",
-    "Evaluasi KDE Re-Embedding dengan pemisahan latih/uji yang ketat.\n",
-    "\n",
-    "Aturan yang dijaga skrip ini:\n",
-    "  - KDE HANYA dibangun dari kejadian pada berkas latih.\n",
-    "  - Inferensi HANYA dijalankan pada kejadian di berkas uji.\n",
-    "  - Tidak ada satu pun event_id yang muncul di kedua sisi (diverifikasi otomatis).\n",
-    "\"\"\"\n",
-    "\n",
-    "import os\n",
-    "import json\n",
-    "import argparse\n",
-    "import numpy as np\n",
-    "import tensorflow as tf\n",
-    "\n",
-    "from Library.utils import (\n",
-    "    latent_codes_1D,\n",
-    "    embedding_PDFs_1D,\n",
-    "    infer_1C_PDFs,\n",
-    "    calc_confusion_metrics,\n",
-    "    plot_confusion,\n",
-    ")\n",
-    "\n",
-    "# ==========================================\n",
-    "# KONFIGURASI\n",
-    "# ==========================================\n",
-    "BASE_DATA = \"/Volumes/Local Disk/Code_Git/S3_code/seismic/mcu_quake/retraining_mcu_q_indonesia/data_indonesia\"\n",
-    "TRAIN_JSON = os.path.join(BASE_DATA, \"indonesia_train_data.json\")\n",
-    "TEST_JSON = os.path.join(BASE_DATA, \"indonesia_test_data.json\")\n",
-    "\n",
-    "# Himpunan domain sumber (opsional, untuk skenario baseline & uji retensi)\n",
-    "UUSS_JSON = \"/path/ke/uuss_data.json\"\n",
-    "STEAD_JSON = \"/path/ke/stead_data.json\"\n",
-    "\n",
-    "MODEL_PRETRAINED = \"/Volumes/Local Disk/.../Pre-trained model/MCU-Quake 5-20\"\n",
-    "MODEL_RETRAINED = \"output_models/frozen_extractor_indonesia_Z.keras\"\n",
-    "\n",
-    "OUTPUT_DIR = \"output_eval\"\n",
-    "INPUT_SIZE = 700\n",
-    "CHANNEL = \"Z\"\n",
-    "NOISE_CHANNEL = f\"{CHANNEL}_noise\"\n",
-    "\n",
-    "SCENARIOS = {\n",
-    "    # nama            model              sumber KDE     himpunan uji\n",
-    "    \"baseline\":       (MODEL_PRETRAINED, \"source\",      TEST_JSON),\n",
-    "    \"kde_reembed\":    (MODEL_PRETRAINED, TRAIN_JSON,    TEST_JSON),\n",
-    "    \"retrained\":      (MODEL_RETRAINED,  TRAIN_JSON,    TEST_JSON),\n",
-    "    \"retensi_uuss\":   (MODEL_PRETRAINED, TRAIN_JSON,    UUSS_JSON),\n",
-    "    \"retensi_stead\":  (MODEL_PRETRAINED, TRAIN_JSON,    STEAD_JSON),\n",
-    "}\n",
-    "\n",
-    "\n",
-    "# ==========================================\n",
-    "# EKSTRAKSI EMBEDDING\n",
-    "# ==========================================\n",
-    "def build_embeddings(json_path, model, label=\"\"):\n",
-    "    \"\"\"Kembalikan {'keys': [...], 'noise': [...], 'le': [...]} sejajar indeksnya.\"\"\"\n",
-    "    with open(json_path, \"r\") as f:\n",
-    "        data = json.load(f)\n",
-    "\n",
-    "    out = {\"keys\": [], \"noise\": [], \"le\": []}\n",
-    "    skipped = []\n",
-    "\n",
-    "    for key, rec in data.items():\n",
-    "        try:\n",
-    "            sig_le = np.array(rec[CHANNEL][:INPUT_SIZE])\n",
-    "            sig_no = np.array(rec[NOISE_CHANNEL][-INPUT_SIZE:])\n",
-    "            if len(sig_le) != INPUT_SIZE or len(sig_no) != INPUT_SIZE:\n",
-    "                raise ValueError(f\"panjang jendela {len(sig_le)}/{len(sig_no)}\")\n",
-    "            out[\"le\"].append(latent_codes_1D(sig_le, model))\n",
-    "            out[\"noise\"].append(latent_codes_1D(sig_no, model))\n",
-    "            out[\"keys\"].append(key)\n",
-    "        except Exception as e:\n",
-    "            skipped.append((key, str(e)))\n",
-    "\n",
-    "    print(f\"[{label}] {json_path}\")\n",
-    "    print(f\"[{label}] terpakai: {len(out['keys'])} kejadian | dilewati: {len(skipped)}\")\n",
-    "    if skipped:\n",
-    "        for k, e in skipped[:5]:\n",
-    "            print(f\"[{label}]   lewat: {k} -> {e}\")\n",
-    "    print(f\"[{label}] dimensi laten: {np.asarray(out['le'][0]).shape}\")\n",
-    "    return out, skipped\n",
-    "\n",
-    "\n",
-    "def assert_disjoint(ref, test):\n",
-    "    overlap = set(ref[\"keys\"]) & set(test[\"keys\"])\n",
-    "    if overlap:\n",
-    "        raise RuntimeError(\n",
-    "            f\"KEBOCORAN DATA: {len(overlap)} event_id muncul di referensi dan uji. \"\n",
-    "            f\"Contoh: {sorted(overlap)[:5]}\"\n",
-    "        )\n",
-    "    print(f\"[CEK] referensi {len(ref['keys'])} | uji {len(test['keys'])} | irisan 0 \\u2713\")\n",
-    "\n",
-    "\n",
-    "# ==========================================\n",
-    "# EVALUASI SATU SKENARIO\n",
-    "# ==========================================\n",
-    "def run_scenario(name):\n",
-    "    model_path, ref_source, test_path = SCENARIOS[name]\n",
-    "\n",
-    "    print(\"=\" * 70)\n",
-    "    print(f\"SKENARIO: {name}\")\n",
-    "    print(\"=\" * 70)\n",
-    "\n",
-    "    model = tf.keras.models.load_model(model_path)\n",
-    "\n",
-    "    if ref_source == \"source\":\n",
-    "        # Baseline: kerapatan referensi dibangun dari domain sumber, bukan Indonesia\n",
-    "        ref_u, _ = build_embeddings(UUSS_JSON, model, \"ref-uuss\")\n",
-    "        ref_s, _ = build_embeddings(STEAD_JSON, model, \"ref-stead\")\n",
-    "        ref = {\n",
-    "            \"keys\": ref_u[\"keys\"] + ref_s[\"keys\"],\n",
-    "            \"noise\": ref_u[\"noise\"] + ref_s[\"noise\"],\n",
-    "            \"le\": ref_u[\"le\"] + ref_s[\"le\"],\n",
-    "        }\n",
-    "    else:\n",
-    "        ref, _ = build_embeddings(ref_source, model, \"referensi\")\n",
-    "\n",
-    "    test, skipped = build_embeddings(test_path, model, \"uji\")\n",
-    "    assert_disjoint(ref, test)\n",
-    "\n",
-    "    print(\"[INFO] Membangun KDE dari himpunan referensi...\")\n",
-    "    pdfs = embedding_PDFs_1D(\n",
-    "        {\"noise\": ref[\"noise\"], \"le\": ref[\"le\"]}, source_list=[\"noise\", \"le\"]\n",
-    "    )\n",
-    "\n",
-    "    print(\"[INFO] Inferensi pada himpunan uji...\")\n",
-    "    true_labels, pred_labels = [], []\n",
-    "    for cls, gt in ((\"le\", 1), (\"noise\", 0)):\n",
-    "        for emb in test[cls]:\n",
-    "            infer_type, _, _ = infer_1C_PDFs(emb, pdfs, choose_pdf=\"Kernel\")\n",
-    "            true_labels.append(gt)\n",
-    "            pred_labels.append(infer_type)\n",
-    "\n",
-    "    print(\"\\n--- METRIK ---\")\n",
-    "    cnf, metrics = calc_confusion_metrics(true_labels, pred_labels)\n",
-    "\n",
-    "    os.makedirs(OUTPUT_DIR, exist_ok=True)\n",
-    "    stem = os.path.join(OUTPUT_DIR, f\"{name}_{CHANNEL}\")\n",
-    "\n",
-    "    with open(f\"{stem}_metrics.json\", \"w\") as f:\n",
-    "        json.dump(\n",
-    "            {\n",
-    "                \"skenario\": name,\n",
-    "                \"model\": model_path,\n",
-    "                \"sumber_referensi\": ref_source,\n",
-    "                \"berkas_uji\": test_path,\n",
-    "                \"n_referensi\": len(ref[\"keys\"]),\n",
-    "                \"n_uji\": len(test[\"keys\"]),\n",
-    "                \"n_dilewati\": len(skipped),\n",
-    "                \"dimensi_laten\": int(np.asarray(test[\"le\"][0]).shape[-1]),\n",
-    "                \"confusion_matrix\": cnf.tolist(),\n",
-    "                \"metrics\": {k: (v if not isinstance(v, np.generic) else float(v))\n",
-    "                            for k, v in metrics.items()},\n",
-    "            },\n",
-    "            f,\n",
-    "            indent=2,\n",
-    "            default=lambda o: o.tolist() if hasattr(o, \"tolist\") else float(o),\n",
-    "        )\n",
-    "\n",
-    "    fig = plot_confusion(\n",
-    "        title=f\"{name} ({CHANNEL}-Axis)\\nUji: {len(test['keys'])} kejadian/kelas\",\n",
-    "        true_labels=[\"Noise\", \"Local Eq.\"],\n",
-    "        matrix=cnf,\n",
-    "        metrics=metrics,\n",
-    "    )\n",
-    "    fig.savefig(f\"{stem}_confusion.png\", bbox_inches=\"tight\", dpi=300)\n",
-    "    print(f\"\\n\\u2705 {name} selesai \\u2014 {stem}_confusion.png\")\n",
-    "\n",
-    "    return cnf, metrics\n",
-    "\n",
-    "\n",
-    "# ==========================================\n",
-    "if __name__ == \"__main__\":\n",
-    "    ap = argparse.ArgumentParser()\n",
-    "    ap.add_argument(\"skenario\", nargs=\"?\", default=\"all\", choices=list(SCENARIOS) + [\"all\"])\n",
-    "    args = ap.parse_args()\n",
-    "\n",
-    "    targets = list(SCENARIOS) if args.skenario == \"all\" else [args.skenario]\n",
-    "    for s in targets:\n",
-    "        run_scenario(s)"
-   ]
-  }
- ],
- "metadata": {
-  "kernelspec": {
-   "display_name": "tf-metal",
-   "language": "python",
-   "name": "python3"
-  },
-  "language_info": {
-   "codemirror_mode": {
-    "name": "ipython",
-    "version": 3
-   },
-   "file_extension": ".py",
-   "mimetype": "text/x-python",
-   "name": "python",
-   "nbconvert_exporter": "python",
-   "pygments_lexer": "ipython3",
-   "version": "3.11.15"
-  }
- },
- "nbformat": 4,
- "nbformat_minor": 5
+# -*- coding: utf-8 -*-
+"""
+Evaluasi KDE Re-Embedding dengan pemisahan latih/uji yang ketat.
+
+Aturan yang dijaga skrip ini:
+  - KDE HANYA dibangun dari kejadian pada berkas latih.
+  - Inferensi HANYA dijalankan pada kejadian di berkas uji.
+  - Tidak ada satu pun event_id yang muncul di kedua sisi (diverifikasi otomatis).
+
+Versi ringkas/contoh dasar. Boilerplate ekstraksi embedding, cek kebocoran
+data, dan pembangunan KDE sudah dipindah ke Library/kde_reembedding.py
+(dipakai bersama oleh skrip ini, evaluate_kde_re_embedding_all.py, dan
+evaluate_kde_reembed_noise_only.py) -- skrip ini hanya berisi konfigurasi
+path & susunan skenario yang spesifik untuknya.
+
+Catatan: berkas ini sebelumnya tersimpan dalam format notebook (JSON)
+berekstensi .py yang tidak bisa dijalankan langsung dari command line;
+sekarang sudah jadi berkas Python biasa.
+"""
+
+import argparse
+import os
+
+import tensorflow as tf
+
+from Library.kde_reembedding import (
+    build_embeddings,
+    assert_disjoint,
+    KDEReEmbedder,
+)
+from Library.utils import calc_confusion_metrics, plot_confusion
+
+# ==========================================
+# KONFIGURASI
+# ==========================================
+BASE_DATA = "/Volumes/Local Disk/Code_Git/S3_code/seismic/mcu_quake/retraining_mcu_q_indonesia/data_indonesia"
+TRAIN_JSON = os.path.join(BASE_DATA, "indonesia_train_data.json")
+TEST_JSON = os.path.join(BASE_DATA, "indonesia_test_data.json")
+
+# Himpunan domain sumber (opsional, untuk skenario baseline & uji retensi)
+UUSS_JSON = "/path/ke/uuss_data.json"
+STEAD_JSON = "/path/ke/stead_data.json"
+
+MODEL_PRETRAINED = "/Volumes/Local Disk/.../Pre-trained model/MCU-Quake 5-20"
+MODEL_RETRAINED = "output_models/frozen_extractor_indonesia_Z.keras"
+
+OUTPUT_DIR = "output_eval"
+CHANNEL = "Z"
+
+SCENARIOS = {
+    # nama            model              sumber KDE     himpunan uji
+    "baseline":       (MODEL_PRETRAINED, "source",      TEST_JSON),
+    "kde_reembed":    (MODEL_PRETRAINED, TRAIN_JSON,    TEST_JSON),
+    "retrained":      (MODEL_RETRAINED,  TRAIN_JSON,    TEST_JSON),
+    "retensi_uuss":   (MODEL_PRETRAINED, TRAIN_JSON,    UUSS_JSON),
+    "retensi_stead":  (MODEL_PRETRAINED, TRAIN_JSON,    STEAD_JSON),
 }
+
+
+# ==========================================
+# EVALUASI SATU SKENARIO
+# ==========================================
+def run_scenario(name):
+    model_path, ref_source, test_path = SCENARIOS[name]
+
+    print("=" * 70)
+    print(f"SKENARIO: {name}")
+    print("=" * 70)
+
+    model = tf.keras.models.load_model(model_path)
+
+    if ref_source == "source":
+        # Baseline: kerapatan referensi dibangun dari domain sumber, bukan Indonesia
+        ref_u, _ = build_embeddings(UUSS_JSON, model, channel=CHANNEL, label="ref-uuss")
+        ref_s, _ = build_embeddings(STEAD_JSON, model, channel=CHANNEL, label="ref-stead")
+        ref = {
+            "keys": ref_u["keys"] + ref_s["keys"],
+            "noise": ref_u["noise"] + ref_s["noise"],
+            "le": ref_u["le"] + ref_s["le"],
+        }
+    else:
+        ref, _ = build_embeddings(ref_source, model, channel=CHANNEL, label="referensi")
+
+    test, skipped = build_embeddings(test_path, model, channel=CHANNEL, label="uji")
+    assert_disjoint(ref, test)
+
+    print("[INFO] Membangun KDE dari himpunan referensi...")
+    kde = KDEReEmbedder(choose_pdf="Kernel").fit(ref)
+
+    print("[INFO] Inferensi pada himpunan uji...")
+    hasil = kde.evaluate(test)
+    cnf, metrics = hasil["confusion_matrix"], hasil["metrics"]
+
+    print("\n--- METRIK ---")
+    calc_confusion_metrics(hasil["true_labels"], hasil["pred_labels"])
+
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    stem = os.path.join(OUTPUT_DIR, f"{name}_{CHANNEL}")
+
+    import json
+    from Library.kde_reembedding import NpEncoder
+    with open(f"{stem}_metrics.json", "w") as f:
+        json.dump(
+            {
+                "skenario": name,
+                "model": model_path,
+                "sumber_referensi": ref_source,
+                "berkas_uji": test_path,
+                "n_referensi": len(ref["keys"]),
+                "n_uji": len(test["keys"]),
+                "n_dilewati": len(skipped),
+                "confusion_matrix": cnf,
+                "metrics": metrics,
+            },
+            f, indent=2, cls=NpEncoder,
+        )
+
+    fig = plot_confusion(
+        title=f"{name} ({CHANNEL}-Axis)\nUji: {len(test['keys'])} kejadian/kelas",
+        true_labels=["Noise", "Local Eq."],
+        matrix=cnf,
+        metrics=metrics,
+    )
+    fig.savefig(f"{stem}_confusion.png", bbox_inches="tight", dpi=300)
+    print(f"\n✅ {name} selesai — {stem}_confusion.png")
+
+    return cnf, metrics
+
+
+# ==========================================
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser()
+    ap.add_argument("skenario", nargs="?", default="all", choices=list(SCENARIOS) + ["all"])
+    args = ap.parse_args()
+
+    targets = list(SCENARIOS) if args.skenario == "all" else [args.skenario]
+    for s in targets:
+        run_scenario(s)
